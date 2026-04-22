@@ -4,15 +4,16 @@ services:
     container_name: shorty-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: shorty
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-shorty}
     ports:
-      - "5434:5432"
+      # Bind to 127.0.0.1 only — not exposed to the public internet on the VM.
+      - "127.0.0.1:5434:5432"
     volumes:
       - shorty_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d shorty"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-shorty}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -22,7 +23,7 @@ services:
     container_name: shorty-redis
     restart: unless-stopped
     ports:
-      - "6380:6379"
+      - "127.0.0.1:6380:6379"
     volumes:
       - shorty_redisdata:/data
     healthcheck:
@@ -30,6 +31,40 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  backend:
+    build:
+      context: ./Backend
+    container_name: shorty-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-shorty}
+      REDIS_URL: redis://redis:6379
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      SLUG_LENGTH: 7
+    expose:
+      - "4000"
+
+  frontend:
+    build:
+      context: ./Frontend
+      args:
+        # Same-origin: axios will call /api/* which nginx proxies to backend.
+        VITE_API_URL: /api
+    container_name: shorty-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
 
 volumes:
   shorty_pgdata:
